@@ -78,7 +78,7 @@ static Mat mat_alloc(int w, int h) {
   return mat;
 }
 
-static Mat image_to_matrix(Image img) {
+static Mat image_luminance(Image img) {
   Mat mat = mat_alloc(img.width, img.height);
   for (int x = 0; x < img.width; x++) {
     for (int y = 0; y < img.height; y++) {
@@ -104,24 +104,23 @@ int main(int argc, char **argv) {
   ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
   Color *points = (Color *)img.data;
 
-  Mat mat = image_to_matrix(img);
-  Mat luminance = mat_alloc(img.width, img.height);
+  Mat luminance = image_luminance(img);
+  Mat gradient = mat_alloc(img.width, img.height);
+  sobel_filter(luminance, gradient);
 
   float ww = img.width;
 
   while (!WindowShouldClose()) {
     BeginDrawing();
     ClearBackground(BLACK);
-    GuiSliderBar((Rectangle){0, 0, WIDTH, 10}, "", TextFormat("%.2f", ww), &ww,
-                 (float)img.width / 2, img.width * 1.5f);
 
-    for (int x = 0; x < mat.width; x++) {
-      for (int y = 0; y < mat.height; y++) {
+    for (int x = 0; x < luminance.width; x++) {
+      for (int y = 0; y < luminance.height; y++) {
         Color c = GetColor(0xFFFFFF);
-        c.a = mat.data[y * mat.width + x];
+        c.a = gradient.data[y * gradient.width + x];
 
-        DrawRectangle(WIDTH / 2 - mat.width / 2 + x,
-                      HEIGHT / 2 - mat.height / 2 + y, 1, 1, c);
+        DrawRectangle(WIDTH / 2 - gradient.width / 2 + x,
+                      HEIGHT / 2 - gradient.height / 2 + y, 1, 1, c);
       }
     }
 
