@@ -5,6 +5,6 @@ set -xe
 CFLAGS="-Wall -Wextra -ggdb `pkg-config --cflags raylib`"
 LIBS="`pkg-config --libs raylib` -lm"
 
-mkdir -p ./bin/
+clang $CFLAGS -o ./seam ./*.c $LIBS -L./bin/
 
-clang $CFLAGS -o ./bin/kmeans  ./*.c $LIBS -L./bin/
+./seam $1

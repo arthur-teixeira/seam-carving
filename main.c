@@ -1,5 +1,8 @@
+#include <float.h>
 #include <math.h>
 #include <raylib.h>
+#include <stdbool.h>
+#include <stddef.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -69,11 +72,79 @@ static float rgb_to_luminance(Color c) {
   return 0.299 * c.r + 0.587 * c.g + 0.114 * c.b;
 }
 
+/*
+
+The optimal seam can be found using dynamic programming. The
+first step is to traverse the image from the second row to the last row
+and compute the cumulative minimum energy M for all possible
+connected seams for each entry (i, j):
+
+M(i, j) = e(i, j)+ min(M(i−1, j −1),M(i−1, j),M(i−1, j +1))
+
+ */
+
+static void gradient_to_dp(Mat gradient, Mat dp) {
+  assert(dp.width == gradient.width);
+  assert(dp.height == gradient.height);
+
+  for (int x = 0; x < gradient.width; x++) {
+    // First row is a given
+    MAT_AT(dp, 0, x) = MAT_AT(gradient, 0, x);
+  }
+
+  for (int y = 1; y < gradient.height; y++) {
+    for (int cx = 0; cx < gradient.width; cx++) {
+      // Compute minimal value moving down left, down or down right
+      float m = FLT_MAX;
+      for (int dx = -1; dx <= 1; dx++) {
+        int x = cx + dx;
+        float c =
+            (0 <= x && x < gradient.width) ? MAT_AT(dp, y - 1, x) : FLT_MAX;
+        if (c < m) {
+          m = c;
+        }
+      }
+      MAT_AT(dp, y, cx) = MAT_AT(gradient, y, cx) + m;
+    }
+  }
+}
+
+/*
+At the end of this process, the minimum value of the last row in
+M will indicate the end of the minimal connected vertical seam.
+Hence, in the second step we backtrack from this minimum entry on
+M to find the path of the optimal seam (see Figure 1). The definition
+of M for horizontal seams is similar
+*/
+
+static void compute_seam(Mat dp, int *seam) {
+  int y = dp.height - 1;
+  seam[y] = 0;
+
+  // Get minimum value at the last row
+  for (int x = 1; x < dp.width; x++) {
+    if (MAT_AT(dp, y, x) < MAT_AT(dp, y, seam[y])) {
+      seam[y] = x;
+    }
+  }
+
+  for (y = dp.height - 2; y >= 0; y--) {
+    seam[y] = seam[y + 1]; // previous value
+    for (int dx = -1; dx <= 1; dx++) {
+      int x = seam[y + 1] + dx;
+      if ((x >= 0 && x < dp.width) &&
+          MAT_AT(dp, y, x) < MAT_AT(dp, y, seam[y])) {
+        seam[y] = x;
+      }
+    }
+  }
+}
+
 static Mat mat_alloc(int w, int h) {
   Mat mat = {0};
   mat.width = w;
   mat.height = h;
-  mat.data = malloc(mat.width * mat.height * sizeof(*mat.data));
+  mat.data = calloc(mat.width * mat.height, sizeof(*mat.data));
   assert(mat.data != NULL);
   return mat;
 }
@@ -90,6 +161,18 @@ static Mat image_luminance(Image img) {
   return mat;
 }
 
+static bool is_in_seam(int *seam, size_t size, int y, int x) {
+  for (int i = 0; i < size; i++) {
+    int sy = i;
+    int sx = seam[i];
+    if (sy == y && sx == x) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     printf("Usage: %s <image>", argv[0]);
@@ -100,27 +183,38 @@ int main(int argc, char **argv) {
 
   InitWindow(WIDTH, HEIGHT, "Seam carving");
 
-  Image img = LoadImage(filepath);
-  ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-  Color *points = (Color *)img.data;
+  Image original = LoadImage(filepath);
+  ImageFormat(&original, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 
-  Mat luminance = image_luminance(img);
-  Mat gradient = mat_alloc(img.width, img.height);
+  Mat luminance = image_luminance(original);
+  Mat gradient = mat_alloc(original.width, original.height);
   sobel_filter(luminance, gradient);
 
-  float ww = img.width;
+  Mat dp = mat_alloc(original.width, original.height);
+  gradient_to_dp(gradient, dp);
+
+  int *seam = calloc(original.height, sizeof(*seam));
+  compute_seam(dp, seam);
+
+  Color *data = original.data;
 
   while (!WindowShouldClose()) {
     BeginDrawing();
     ClearBackground(BLACK);
 
-    for (int x = 0; x < luminance.width; x++) {
-      for (int y = 0; y < luminance.height; y++) {
+    for (int x = 0; x < original.width; x++) {
+      for (int y = 0; y < original.height; y++) {
+        int idx = y * original.width + x;
         Color c = GetColor(0xFFFFFF);
-        c.a = gradient.data[y * gradient.width + x];
 
-        DrawRectangle(WIDTH / 2 - gradient.width / 2 + x,
-                      HEIGHT / 2 - gradient.height / 2 + y, 1, 1, c);
+        if (is_in_seam(seam, original.height, y, x)) {
+          c = RED;
+        } else {
+          c = data[idx];
+        }
+
+        DrawRectangle(WIDTH / 2 - original.width / 2 + x,
+                      HEIGHT / 2 - original.height / 2 + y, 1, 1, c);
       }
     }
 
