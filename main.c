@@ -234,9 +234,6 @@ static void draw_mat(Image mat) {
   }
 }
 
-// How can I properly create an image from this? The matrix data is
-// an array of floating point numbers representing brightness.
-// This code is seg faulting on LoadTextureFromImage
 static Image mat_to_img(Mat mat, int mipmaps) {
   Image img = {0};
   img.width = mat.width;
@@ -253,7 +250,6 @@ static Image mat_to_img(Mat mat, int mipmaps) {
     }
   }
 
-  ExportImage(img, "out.png");
   return img;
 }
 
