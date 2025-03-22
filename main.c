@@ -219,7 +219,89 @@ static Image img_alloc(Image original, int stride) {
       new_data[y * mat.width + x] = original_data[y * stride + x];
     }
   }
+
   return mat;
+}
+
+static void draw_mat(Image mat) {
+  for (int y = 0; y < mat.height; y++) {
+    for (int x = 0; x < mat.width; x++) {
+      Color *data = mat.data;
+      Color c = data[y * mat.width + x];
+      DrawRectangle(WIDTH / 2 - mat.width / 2 + x,
+                    HEIGHT / 2 - mat.height / 2 + y, 1, 1, c);
+    }
+  }
+}
+
+// How can I properly create an image from this? The matrix data is
+// an array of floating point numbers representing brightness.
+// This code is seg faulting on LoadTextureFromImage
+static Image mat_to_img(Mat mat, int mipmaps) {
+  Image img = {0};
+  img.width = mat.width;
+  img.height = mat.height;
+  img.format = PIXELFORMAT_UNCOMPRESSED_R8G8B8A8;
+  img.mipmaps = 1;
+  Color *data = calloc(mat.width * mat.height, sizeof(Color));
+  img.data = data;
+  int i = 0;
+  for (int y = 0; y < mat.height; y++) {
+    for (int x = 0; x < mat.width; x++) {
+      uint8_t alpha = MAT_AT(mat, y, x, mat.stride);
+      data[y * mat.width + x] = (Color){255, 255, 255, alpha};
+    }
+  }
+
+  ExportImage(img, "out.png");
+  return img;
+}
+
+typedef enum {
+  STATE_START,
+  STATE_LUMINANCE,
+  STATE_GRADIENT,
+  STATE_SEAM_REMOVAL,
+} State;
+
+static State state = STATE_START;
+
+Image img;
+char *filepath;
+int seams_removed;
+Mat luminance;
+Mat gradient;
+Mat dp;
+
+bool init = false;
+Image initial_luminance;
+Image initial_gradient;
+
+void set_state() {
+  seams_removed = 0;
+  img = LoadImage(filepath);
+  ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
+
+  luminance = image_luminance(img);
+  gradient = mat_alloc(img.width, img.height);
+  sobel_filter(luminance, gradient);
+
+  if (!init) {
+    initial_luminance = mat_to_img(luminance, img.mipmaps);
+    initial_gradient = mat_to_img(gradient, img.mipmaps);
+    init = true;
+  }
+
+  dp = mat_alloc(img.width, img.height);
+}
+
+void reset_state() {
+  UnloadImage(img);
+  free(dp.data);
+  free(luminance.data);
+  free(gradient.data);
+
+  set_state();
 }
 
 int main(int argc, char **argv) {
@@ -228,67 +310,99 @@ int main(int argc, char **argv) {
     return 0;
   }
 
-  char *filepath = argv[1];
+  filepath = argv[1];
+  set_state();
 
   InitWindow(WIDTH, HEIGHT, "Seam carving");
-
-  Image img = LoadImage(filepath);
   int stride = img.width;
-
-  ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-
-  Mat luminance;
-  Mat gradient = mat_alloc(img.width, img.height);
-  Mat dp = mat_alloc(img.width, img.height);
   int *seam = calloc(img.height, sizeof(*seam));
-  luminance = image_luminance(img);
-  sobel_filter(luminance, gradient);
-
   int seams_to_remove = 1000;
-  int seams_removed = 0;
+  seams_removed = 0;
 
-  Color *data = img.data;
+  Texture final_tex = {0};
 
-  bool frame = 0;
+  int frame = 0;
+  size_t rate = 128;
+  bool show_seam = true;
   while (!WindowShouldClose()) {
-    BeginDrawing();
-    ClearBackground(BLACK);
-
-    double fps = GetFPS();
-    DrawText(TextFormat("Removed %d seams, %.0f FPS", seams_removed, fps), 0, 0,
-             16, RED);
-
-    if (seams_removed < seams_to_remove) {
-      if ((frame & 1) == 0) {
-        gradient_to_dp(gradient, dp);
-        compute_seam(dp, seam);
-        for (int y = 0; y < img.height; y++) {
-          int cx = seam[y];
-          data[(y)*stride + (cx)] = RED;
-        }
-
-      } else {
-        for (int cy = 0; cy < img.height; ++cy) {
-          int cx = seam[cy];
-          img_remove_column_at_row(img, cy, cx, stride);
-          mat_remove_column_at_row(luminance, cy, cx);
-          mat_remove_column_at_row(gradient, cy, cx);
-        }
-
-        img.width -= 1;
-        luminance.width -= 1;
-        gradient.width -= 1;
-        dp.width -= 1;
-        seams_removed += 1;
+    if (IsKeyPressed(KEY_ONE)) {
+      reset_state();
+      state = STATE_START;
+    } else if (IsKeyPressed(KEY_TWO)) {
+      state = STATE_LUMINANCE;
+    } else if (IsKeyPressed(KEY_THREE)) {
+      state = STATE_GRADIENT;
+    } else if (IsKeyPressed(KEY_FOUR)) {
+      reset_state();
+      state = STATE_SEAM_REMOVAL;
+    } else if (IsKeyPressed(KEY_UP)) {
+      if (rate >= 2) {
+        rate /= 2;
+      }
+    } else if (IsKeyPressed(KEY_DOWN)) {
+      if (rate <= 1024) {
+        rate *= 2;
       }
     }
 
-    Image new = img_alloc(img, stride);
-    Texture tex = LoadTextureFromImage(new);
-    DrawTexture(tex, WIDTH / 2 - img.width / 2, HEIGHT / 2 - img.height / 2,
-                WHITE);
+    BeginDrawing();
+    DrawText(TextFormat("%d fps", GetFPS()), 0, 0, 16, RED);
+    ClearBackground(BLACK);
+    switch (state) {
+    case STATE_START: {
+      Texture tex = LoadTextureFromImage(img);
+      DrawTexture(tex, WIDTH / 2 - img.width / 2, HEIGHT / 2 - img.height / 2,
+                  WHITE);
+      break;
+    }
+    case STATE_LUMINANCE:
+      draw_mat(initial_luminance);
+      break;
+    case STATE_GRADIENT:
+      draw_mat(initial_gradient);
+      break;
+    case STATE_SEAM_REMOVAL: {
+      Color *data = img.data;
+      frame += 1;
+      if (seams_removed < seams_to_remove) {
+        if (final_tex.id != 0) {
+          UnloadTexture(final_tex);
+        }
 
-    frame = !frame;
+        if (show_seam) {
+          gradient_to_dp(gradient, dp);
+          compute_seam(dp, seam);
+          for (int y = 0; y < img.height; y++) {
+            int cx = seam[y];
+            data[(y)*stride + (cx)] = RED;
+          }
+          if (frame % rate == 0) {
+            show_seam = false;
+          }
+        } else {
+          for (int cy = 0; cy < img.height; ++cy) {
+            int cx = seam[cy];
+            img_remove_column_at_row(img, cy, cx, stride);
+            mat_remove_column_at_row(luminance, cy, cx);
+            mat_remove_column_at_row(gradient, cy, cx);
+          }
+
+          img.width -= 1;
+          luminance.width -= 1;
+          gradient.width -= 1;
+          dp.width -= 1;
+          seams_removed += 1;
+          show_seam = true;
+        }
+        Image new = img_alloc(img, stride);
+        final_tex = LoadTextureFromImage(new);
+      }
+      DrawTexture(final_tex, WIDTH / 2 - img.width / 2,
+                  HEIGHT / 2 - img.height / 2, WHITE);
+
+      break;
+    }
+    }
     EndDrawing();
   }
 
