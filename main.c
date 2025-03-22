@@ -163,20 +163,11 @@ static void compute_seam(Mat dp, int *seam) {
 static void img_remove_column_at_row(Image img, int y, int x, int stride) {
   Color *data = img.data;
   Color *pixel_row = &data[y * stride];
-  // data[(y)*stride + (x)] = BLACK;
-  // *(int *)&img.data[y * stride + x] = ColorToInt(BLACK);
-  // for (int xx = x; x < img.width; x++) {
-  //   pixel_row[xx] = pixel_row[xx + 1];
-  // }
-
   memmove(pixel_row + x, pixel_row + x + 1, (stride - x - 1) * sizeof(Color));
 }
 
 static void mat_remove_column_at_row(Mat mat, int row, int column) {
   float *pixel_row = &MAT_AT(mat, row, 0, mat.stride);
-  // for (int x = column; x < mat.width; x++) {
-  //   pixel_row[x] = pixel_row[x + 1];
-  // }
   memmove(pixel_row + column, pixel_row + column + 1,
           (mat.stride - column - 1) * sizeof(float));
 }
@@ -203,6 +194,34 @@ static Mat image_luminance(Image img) {
   return mat;
 }
 
+#define ARENA_SIZE HEIGHT *WIDTH * sizeof(Color)
+static uint8_t arena[ARENA_SIZE] = {0};
+
+static inline void *arena_alloc(size_t nb, size_t size) {
+  assert(nb * size <= ARENA_SIZE);
+  return arena;
+}
+
+static inline void arena_free() { memset(arena, 0, ARENA_SIZE); }
+
+static Image img_alloc(Image original, int stride) {
+  Image mat = {0};
+  mat.width = original.width;
+  mat.height = original.height;
+  mat.format = original.format;
+  mat.mipmaps = original.mipmaps;
+  Color *new_data = arena_alloc(mat.width * mat.height, sizeof(Color));
+  mat.data = new_data;
+
+  Color *original_data = original.data;
+  for (int y = 0; y < mat.height; y++) {
+    for (int x = 0; x < mat.width; x++) {
+      new_data[y * mat.width + x] = original_data[y * stride + x];
+    }
+  }
+  return mat;
+}
+
 int main(int argc, char **argv) {
   if (argc < 2) {
     printf("Usage: %s <image>", argv[0]);
@@ -213,60 +232,50 @@ int main(int argc, char **argv) {
 
   InitWindow(WIDTH, HEIGHT, "Seam carving");
 
-  Image original = LoadImage(filepath);
-  ImageFormat(&original, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
-  int stride = original.width;
+  Image img = LoadImage(filepath);
+  int stride = img.width;
 
-  printf("IMAGE HEIGHT %d\n", original.height);
+  ImageFormat(&img, PIXELFORMAT_UNCOMPRESSED_R8G8B8A8);
 
   Mat luminance;
-  Mat gradient = mat_alloc(original.width, original.height);
-  Mat dp = mat_alloc(original.width, original.height);
-  int *seam = calloc(original.height, sizeof(*seam));
-  luminance = image_luminance(original);
+  Mat gradient = mat_alloc(img.width, img.height);
+  Mat dp = mat_alloc(img.width, img.height);
+  int *seam = calloc(img.height, sizeof(*seam));
+  luminance = image_luminance(img);
   sobel_filter(luminance, gradient);
 
   int seams_to_remove = 1000;
   int seams_removed = 0;
 
-  Color *data = original.data;
+  Color *data = img.data;
 
-  int frame = 0;
-
+  bool frame = 0;
   while (!WindowShouldClose()) {
     BeginDrawing();
     ClearBackground(BLACK);
 
-    DrawText(TextFormat("Removed %d seams", seams_removed), 0, 0, 16, RED);
-
-    for (int y = 0; y < original.height; y++) {
-      for (int x = 0; x < original.width; x++) {
-        Color *data = original.data;
-        Color c = data[(y)*stride + (x)];
-        DrawRectangle(WIDTH / 2 - original.width / 2 + x,
-                      HEIGHT / 2 - original.height / 2 + y, 1, 1, c);
-      }
-    }
+    double fps = GetFPS();
+    DrawText(TextFormat("Removed %d seams, %.0f FPS", seams_removed, fps), 0, 0,
+             16, RED);
 
     if (seams_removed < seams_to_remove) {
       if ((frame & 1) == 0) {
         gradient_to_dp(gradient, dp);
         compute_seam(dp, seam);
-
-        for (int y = 0; y < original.height; y++) {
+        for (int y = 0; y < img.height; y++) {
           int cx = seam[y];
-          DrawRectangle(WIDTH / 2 - original.width / 2 + cx,
-                        HEIGHT / 2 - original.height / 2 + y, 1, 1, RED);
+          data[(y)*stride + (cx)] = RED;
         }
+
       } else {
-        for (int cy = 0; cy < original.height; ++cy) {
+        for (int cy = 0; cy < img.height; ++cy) {
           int cx = seam[cy];
-          img_remove_column_at_row(original, cy, cx, stride);
+          img_remove_column_at_row(img, cy, cx, stride);
           mat_remove_column_at_row(luminance, cy, cx);
           mat_remove_column_at_row(gradient, cy, cx);
         }
 
-        original.width -= 1;
+        img.width -= 1;
         luminance.width -= 1;
         gradient.width -= 1;
         dp.width -= 1;
@@ -274,7 +283,12 @@ int main(int argc, char **argv) {
       }
     }
 
-    frame +=1;
+    Image new = img_alloc(img, stride);
+    Texture tex = LoadTextureFromImage(new);
+    DrawTexture(tex, WIDTH / 2 - img.width / 2, HEIGHT / 2 - img.height / 2,
+                WHITE);
+
+    frame = !frame;
     EndDrawing();
   }
 
