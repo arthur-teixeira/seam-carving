@@ -316,6 +316,7 @@ int main(int argc, char **argv) {
   seams_removed = 0;
 
   Texture final_tex = {0};
+  bool paused = true;
 
   int frame = 0;
   size_t rate = 128;
@@ -339,10 +340,11 @@ int main(int argc, char **argv) {
       if (rate <= 1024) {
         rate *= 2;
       }
+    } else if (IsKeyPressed(KEY_SPACE)) {
+      paused = !paused;
     }
 
     BeginDrawing();
-    DrawText(TextFormat("%d fps", GetFPS()), 0, 0, 16, RED);
     ClearBackground(BLACK);
     switch (state) {
     case STATE_START: {
@@ -365,7 +367,7 @@ int main(int argc, char **argv) {
           UnloadTexture(final_tex);
         }
 
-        if (show_seam) {
+        if (show_seam || paused) {
           gradient_to_dp(gradient, dp);
           compute_seam(dp, seam);
           for (int y = 0; y < img.height; y++) {
